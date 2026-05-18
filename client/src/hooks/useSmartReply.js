@@ -24,9 +24,19 @@ const useSmartReply = () => {
       });
       setSuggestions(res.data.suggestions || []);
     } catch (err) {
-      const message =
-        err.response?.data?.message ||
-        "Smart reply failed. Please try again later.";
+      const status = err.response?.status;
+      let message = err.response?.data?.message;
+
+      if (status === 404) {
+        message =
+          "AI route not found. Redeploy Render + Vercel, then hard refresh (Ctrl+Shift+R).";
+      } else if (status === 503) {
+        message =
+          "Add GROQ_API_KEY in Render dashboard → Environment, then redeploy.";
+      } else if (!message) {
+        message = "Smart reply failed. Please try again later.";
+      }
+
       toast.error(message);
       setSuggestions([]);
     } finally {
