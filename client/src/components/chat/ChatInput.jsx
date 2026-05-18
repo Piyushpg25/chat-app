@@ -46,7 +46,12 @@ const ChatInput = ({ socket }) => {
   // ── Text send ──
   const sendMessage = (text) => {
     const content = text || message;
-    if (!content.trim() || !socket) return;
+    if (!content.trim()) return;
+
+    if (!socket?.connected) {
+      toast.error('Connection lost — page refresh karo');
+      return;
+    }
 
     socket.emit('send_message', {
       senderId:  user?.id,

@@ -23,6 +23,11 @@ const socketHandler = (io) => {
     });
 
     socket.on('join_room', async (room) => {
+      for (const joined of socket.rooms) {
+        if (joined !== socket.id) {
+          socket.leave(joined);
+        }
+      }
       socket.join(room);
       try {
         const messages = await Message.find({ room })
