@@ -1,6 +1,8 @@
 import axios from "axios";
 import useAuthStore from "../store/authStore";
 
+const RENDER_API = "https://chat-app-ttrq.onrender.com/api";
+
 const resolveBaseURL = () => {
   const fromEnv = import.meta.env.VITE_API_URL?.trim().replace(/\/+$/, "");
 
@@ -12,8 +14,7 @@ const resolveBaseURL = () => {
     return "http://localhost:5000/api";
   }
 
-  // Production: same-origin /api (proxied to Render via vercel.json)
-  return "/api";
+  return RENDER_API;
 };
 
 const api = axios.create({

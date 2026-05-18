@@ -6,11 +6,11 @@ const router = express.Router();
 
 router.post("/suggestions", protect, async (req, res) => {
   try {
-    const apiKey = process.env.GROQ_API_KEY;
+    const apiKey = process.env.GROQ_API_KEY?.trim();
     if (!apiKey) {
       return res.status(503).json({
         message:
-          "AI smart reply is not configured. Add GROQ_API_KEY on Render.",
+          "Add GROQ_API_KEY in Render → Environment, then redeploy.",
       });
     }
 
@@ -64,8 +64,17 @@ router.post("/suggestions", protect, async (req, res) => {
       return res.json({ suggestions: [] });
     }
 
-    const clean = text.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(clean);
+    let parsed = [];
+    try {
+      const clean = text.replace(/```json|```/g, "").trim();
+      const match = clean.match(/\[[\s\S]*\]/);
+      parsed = JSON.parse(match ? match[0] : clean);
+    } catch {
+      parsed = text
+        .split("\n")
+        .map((line) => line.replace(/^[\d.\-*]+\s*/, "").trim())
+        .filter(Boolean);
+    }
 
     if (!Array.isArray(parsed)) {
       return res.json({ suggestions: [] });
