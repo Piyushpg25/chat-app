@@ -2,7 +2,7 @@ import axios from "axios";
 import useAuthStore from "../store/authStore";
 
 const api = axios.create({
-  baseURL: "http://localhost:5000/api",
+  baseURL: "https://chat-app-six-lime-13.vercel.app/login",
 });
 
 api.interceptors.request.use((config) => {

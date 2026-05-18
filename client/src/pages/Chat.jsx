@@ -26,7 +26,7 @@ const Chat = () => {
   useEffect(() => {
     if (socketRef.current) return; // Double connect rokna
 
-    socketRef.current = io("http://localhost:5000", {
+    socketRef.current = io("https://chat-app-six-lime-13.vercel.app/login", {
       reconnection: true,
       reconnectionAttempts: 5,
     });
