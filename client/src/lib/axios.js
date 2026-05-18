@@ -2,7 +2,7 @@ import axios from "axios";
 import useAuthStore from "../store/authStore";
 
 const api = axios.create({
-  baseURL: "https://chat-app-six-lime-13.vercel.app/login",
+  baseURL: "https://chat-app-ttrq.onrender.com/api",
 });
 
 api.interceptors.request.use((config) => {

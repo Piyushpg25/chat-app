@@ -26,7 +26,7 @@ const Chat = () => {
   useEffect(() => {
     if (socketRef.current) return; // Double connect rokna
 
-    socketRef.current = io("https://chat-app-six-lime-13.vercel.app/login", {
+    socketRef.current = io("https://chat-app-ttrq.onrender.com/api", {
       reconnection: true,
       reconnectionAttempts: 5,
     });
