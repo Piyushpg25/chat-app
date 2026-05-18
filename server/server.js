@@ -42,7 +42,7 @@ app.use("/api", apiLimiter);
 
 // Routes
 app.use("/api/auth", authRoutes);
-app.use("api/users", userRoutes);
+app.use("/api/users", userRoutes);
 app.use('/api/upload',uploadRoutes);
 
 

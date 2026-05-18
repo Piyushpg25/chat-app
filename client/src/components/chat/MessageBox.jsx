@@ -46,7 +46,7 @@ const MessageBox = ({ socket }) => {
           .filter((msg) => msg !== null && msg !== undefined)
           .map((msg, i) => {
             const senderId = msg.sender?._id || msg.sender;
-            const isMe = senderId === user?.id;
+            const isMe = String(senderId) === String(user?.id);
             const isEditing = editingId === msg._id;
 
             return (

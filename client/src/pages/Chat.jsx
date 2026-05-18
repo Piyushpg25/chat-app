@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { io } from "socket.io-client";
 import { Hash } from "lucide-react";
@@ -10,8 +10,11 @@ import ParticlesBackground from "@/components/three/ParticlesBackground";
 import useAuthStore from "@/store/authStore";
 import useChatStore from "@/store/chatStore";
 
+const SOCKET_URL =
+  import.meta.env.VITE_SOCKET_URL || "https://chat-app-ttrq.onrender.com";
+
 const Chat = () => {
-  const socketRef = useRef(null);
+  const [socket, setSocket] = useState(null);
   const { user } = useAuthStore();
   const {
     currentRoom,
@@ -24,59 +27,49 @@ const Chat = () => {
   } = useChatStore();
 
   useEffect(() => {
-    if (socketRef.current) return; // Double connect rokna
-
-    socketRef.current = io("https://chat-app-ttrq.onrender.com/api", {
-      transports: ['polling'],
+    const s = io(SOCKET_URL, {
+      transports: ["polling", "websocket"],
       reconnection: true,
       reconnectionAttempts: 5,
     });
 
-    socketRef.current.emit("user_online", user?.id);
+    s.on("online_users", setOnlineUsers);
+    s.on("message_history", setMessages);
+    s.on("receive_message", addMessage);
+    s.on("user_typing", setTypingUser);
+    s.on("user_stop_typing", () => setTypingUser(null));
+    s.on("message_deleted", deleteMessage);
+    s.on("message_edited", editMessage);
 
-    socketRef.current.on("online_users", setOnlineUsers);
-
-    // ✅ Message history load karo
-    socketRef.current.on("message_history", (msgs) => {
-      setMessages(msgs);
-    });
-
-    socketRef.current.on("receive_message", (msg) => {
-      addMessage(msg);
-    });
-
-    socketRef.current.on("user_typing", (username) => {
-      setTypingUser(username);
-    });
-
-    socketRef.current.on("user_stop_typing", () => {
-      setTypingUser(null);
-    });
-
-    // ✅ Delete/Edit events
-    socketRef.current.on("message_deleted", (messageId) => {
-      deleteMessage(messageId);
-    });
-
-    socketRef.current.on("message_edited", (updatedMsg) => {
-      editMessage(updatedMsg);
-    });
+    setSocket(s);
 
     return () => {
-      socketRef.current?.disconnect();
-      socketRef.current = null;
+      s.disconnect();
+      setSocket(null);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    if (socketRef.current) {
-      socketRef.current.emit("join_room", currentRoom);
+    if (socket && user?.id) {
+      socket.emit("user_online", user.id);
+    }
+  }, [socket, user?.id]);
+
+  useEffect(() => {
+    if (socket && currentRoom) {
+      socket.emit("join_room", currentRoom);
       toast.info(`#${currentRoom} Joined`, { duration: 1500 });
     }
-  }, [currentRoom]);
+  }, [socket, currentRoom]);
 
   return (
-    <div className="h-screen bg-black flex overflow-hidden">
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.5 }}
+      className="h-screen bg-black flex overflow-hidden"
+    >
       <ParticlesBackground />
 
       <Sidebar />
@@ -93,12 +86,10 @@ const Chat = () => {
           <span className="text-white/30 text-sm">— {currentRoom} room</span>
         </div>
 
-        {/* ✅ Socket pass kiya MessageBox ko */}
-        <MessageBox socket={socketRef.current} />
-
-        <ChatInput socket={socketRef.current} />
+        <MessageBox socket={socket} />
+        <ChatInput socket={socket} />
       </motion.div>
-    </div>
+    </motion.div>
   );
 };
 

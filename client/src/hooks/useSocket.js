@@ -8,7 +8,9 @@ const useSocket = () => {
   const user = useAuthStore((state) => state.user);
 
   useEffect(() => {
-    socketRef.current = io("http://localhost:5000");
+    const socketUrl =
+      import.meta.env.VITE_SOCKET_URL || "https://chat-app-ttrq.onrender.com";
+    socketRef.current = io(socketUrl);
 
     if (user) {
       socketRef.current.emit("user_online", user.id);
