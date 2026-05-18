@@ -27,6 +27,7 @@ const Chat = () => {
     if (socketRef.current) return; // Double connect rokna
 
     socketRef.current = io("https://chat-app-ttrq.onrender.com/api", {
+      transports: ['polling'],
       reconnection: true,
       reconnectionAttempts: 5,
     });
