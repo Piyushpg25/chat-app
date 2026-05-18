@@ -16,6 +16,7 @@ const authRoutes = require("./routes/auth");
 const userRoutes = require("./routes/user");
 const socketHandler = require("./socket/socketHandler");
 const uploadRoutes = require('./routes/upload');
+const aiRoutes = require("./routes/ai");
 
 
 const app = express();
@@ -44,6 +45,7 @@ app.use("/api", apiLimiter);
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use('/api/upload',uploadRoutes);
+app.use("/api/ai", aiRoutes);
 
 
 // Socket
