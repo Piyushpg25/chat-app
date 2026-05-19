@@ -1,3 +1,9 @@
+const STOP_WORDS = new Set([
+  "the", "and", "for", "that", "this", "with", "you", "are", "was", "have",
+  "hai", "hain", "kya", "main", "tum", "aap", "ke", "ki", "ka", "ko", "se",
+  "me", "mein", "par", "ya", "nahi", "bhi", "toh", "aur", "ek", "wo", "ye",
+]);
+
 export const normalizeMessages = (messages) =>
   (messages || [])
     .filter((m) => m?.content?.trim())
@@ -9,17 +15,6 @@ export const normalizeMessages = (messages) =>
         username: m.sender?.username || "User",
       },
     }));
-
-export const buildContext = (messages) => {
-  const normalized = normalizeMessages(messages);
-  return normalized
-    .slice(-12)
-    .map((msg, i) => {
-      const tag = i === normalized.length - 1 ? " [LATEST]" : "";
-      return `${msg.sender.username}: ${msg.content}${tag}`;
-    })
-    .join("\n");
-};
 
 export const getMessageToReplyTo = (messages, userId) => {
   const withText = normalizeMessages(messages);
@@ -35,30 +30,87 @@ export const getMessageToReplyTo = (messages, userId) => {
   return last;
 };
 
+const extractKeywords = (text) => {
+  if (!text) return [];
+  return [
+    ...new Set(
+      text
+        .replace(/[^\w\s\u0900-\u097F]/gi, " ")
+        .split(/\s+/)
+        .map((w) => w.toLowerCase())
+        .filter((w) => w.length > 2 && !STOP_WORDS.has(w)),
+    ),
+  ].slice(0, 8);
+};
+
+const buildGroqMessages = (normalized, userId, username) => {
+  const me = String(userId || "");
+  const myName = username || "Me";
+  const recent = normalized.slice(-15);
+  const replyTo = getMessageToReplyTo(normalized, userId);
+  const latestText = replyTo?.content?.trim() || recent.at(-1)?.content || "";
+  const latestFrom = replyTo?.sender?.username || "someone";
+
+  const history = recent.map((msg) => {
+    const isMe = String(msg.sender._id) === me;
+    return {
+      role: isMe ? "assistant" : "user",
+      content: msg.content,
+    };
+  });
+
+  return [
+    {
+      role: "system",
+      content: `You suggest 3 short WhatsApp-style replies for "${myName}".
+Must directly answer: ${latestFrom} said "${latestText}"
+Same language as chat. Reference words from that message. JSON only:
+{"replies":["a","b","c"]}`,
+    },
+    ...history,
+    {
+      role: "user",
+      content: `3 replies for ${myName} to "${latestText}". JSON only.`,
+    },
+  ];
+};
+
 export const parseGroqSuggestions = (text) => {
   if (!text) return [];
   try {
     const clean = text.replace(/```json|```/g, "").trim();
-    const match = clean.match(/\[[\s\S]*\]/);
-    const parsed = JSON.parse(match ? match[0] : clean);
-    return Array.isArray(parsed)
-      ? [...new Set(parsed.map((s) => String(s).trim()).filter(Boolean))].slice(
+    const objMatch = clean.match(/\{[\s\S]*\}/);
+    if (objMatch) {
+      const obj = JSON.parse(objMatch[0]);
+      const list = obj.replies || obj.suggestions;
+      if (Array.isArray(list)) {
+        return [...new Set(list.map((s) => String(s).trim()).filter(Boolean))].slice(
           0,
           3,
-        )
-      : [];
+        );
+      }
+    }
+    const arrMatch = clean.match(/\[[\s\S]*\]/);
+    if (arrMatch) {
+      const parsed = JSON.parse(arrMatch[0]);
+      return Array.isArray(parsed)
+        ? [...new Set(parsed.map((s) => String(s).trim()).filter(Boolean))].slice(
+            0,
+            3,
+          )
+        : [];
+    }
   } catch {
-    return [];
+    /* empty */
   }
+  return [];
 };
 
-export const fetchGroqSuggestions = async (apiKey, messages, userId) => {
-  const context = buildContext(messages);
-  if (!context) return [];
+export const fetchGroqSuggestions = async (apiKey, messages, userId, username) => {
+  const normalized = normalizeMessages(messages);
+  if (!normalized.length) return [];
 
-  const replyTo = getMessageToReplyTo(messages, userId);
-  const latest = replyTo?.content?.trim() || "";
-  const latestFrom = replyTo?.sender?.username || "someone";
+  const groqMessages = buildGroqMessages(normalized, userId, username);
 
   const response = await fetch(
     "https://api.groq.com/openai/v1/chat/completions",
@@ -70,22 +122,10 @@ export const fetchGroqSuggestions = async (apiKey, messages, userId) => {
       },
       body: JSON.stringify({
         model: "llama-3.3-70b-versatile",
-        max_tokens: 220,
-        temperature: 0.95,
-        messages: [
-          {
-            role: "system",
-            content: `Write 3 different short chat replies for the user.
-- Match the LATEST message topic only.
-- Same language as chat (Hindi/English/Hinglish).
-- Max 12 words each.
-- JSON array only: ["a","b","c"]`,
-          },
-          {
-            role: "user",
-            content: `Chat:\n${context}\n\nReply to LATEST from ${latestFrom}:\n"${latest}"`,
-          },
-        ],
+        max_tokens: 280,
+        temperature: 0.7,
+        top_p: 0.9,
+        messages: groqMessages,
       }),
     },
   );
@@ -93,5 +133,19 @@ export const fetchGroqSuggestions = async (apiKey, messages, userId) => {
   if (!response.ok) throw new Error("Groq failed");
 
   const data = await response.json();
-  return parseGroqSuggestions(data?.choices?.[0]?.message?.content?.trim());
+  const suggestions = parseGroqSuggestions(
+    data?.choices?.[0]?.message?.content?.trim(),
+  );
+
+  const replyTo = getMessageToReplyTo(normalized, userId);
+  const keywords = extractKeywords(replyTo?.content);
+
+  if (keywords.length && suggestions.length >= 2) {
+    const relevant = suggestions.filter((s) =>
+      keywords.some((k) => s.toLowerCase().includes(k)),
+    );
+    if (relevant.length >= 2) return relevant.slice(0, 3);
+  }
+
+  return suggestions;
 };

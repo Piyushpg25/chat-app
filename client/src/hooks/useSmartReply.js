@@ -24,6 +24,7 @@ const useSmartReply = () => {
     const payload = {
       messages: normalized,
       userId: user?.id,
+      username: user?.username,
     };
 
     const clientKey = import.meta.env.VITE_GROQ_API_KEY?.trim();
@@ -32,13 +33,13 @@ const useSmartReply = () => {
       setLoading(true);
       setSuggestions([]);
 
-      // 1) Client Groq first (fastest if Vercel key set)
       if (clientKey) {
         try {
           const fromClient = await fetchGroqSuggestions(
             clientKey,
             normalized,
             user?.id,
+            user?.username,
           );
           if (fromClient.length >= 2) {
             setSuggestions(fromClient);
@@ -49,21 +50,14 @@ const useSmartReply = () => {
         }
       }
 
-      // 2) Server Groq (Render GROQ_API_KEY)
       const res = await api.post("/ai/suggestions", payload);
 
-      if (res.data.source === "ai" && res.data.suggestions?.length >= 2) {
-        setSuggestions(res.data.suggestions);
-        return;
-      }
-
-      // 3) Server word-based fallback (changes with each message)
-      if (res.data.suggestions?.length) {
+      if (res.data.suggestions?.length >= 2) {
         setSuggestions(res.data.suggestions);
         if (res.data.source === "local") {
           toast.info(
-            "Better AI: Render par GROQ_API_KEY add karo (free — console.groq.com)",
-            { duration: 4000 },
+            "Best AI: free Groq key → Render me GROQ_API_KEY (console.groq.com)",
+            { duration: 4500 },
           );
         }
         return;
@@ -77,6 +71,7 @@ const useSmartReply = () => {
             clientKey,
             normalized,
             user?.id,
+            user?.username,
           );
           if (fromClient.length) {
             setSuggestions(fromClient);
@@ -86,7 +81,7 @@ const useSmartReply = () => {
           /* empty */
         }
       }
-      toast.error("AI suggestions failed — check internet");
+      toast.error("AI suggestions failed");
       setSuggestions([]);
     } finally {
       setLoading(false);

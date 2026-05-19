@@ -3,7 +3,6 @@ const protect = require("../middleware/authMiddleware");
 const logger = require("../config/logger");
 const {
   normalizeMessages,
-  buildContext,
   getMessageToReplyTo,
   getContextualSuggestions,
   callGroq,
@@ -13,24 +12,20 @@ const router = express.Router();
 
 router.post("/suggestions", protect, async (req, res) => {
   try {
-    const { messages, userId } = req.body;
+    const { messages, userId, username } = req.body;
     const normalized = normalizeMessages(messages);
+    const myName = username || req.user?.username || "User";
+    const myId = userId || String(req.user?._id || "");
 
     if (!normalized.length) {
       return res.status(400).json({ message: "No messages provided" });
     }
 
-    const context = buildContext(normalized);
-    if (!context) {
-      return res.json({ suggestions: [], source: "local" });
-    }
-
-    const replyTo = getMessageToReplyTo(normalized, userId);
     const apiKey = process.env.GROQ_API_KEY?.trim();
 
     if (apiKey) {
       try {
-        const suggestions = await callGroq(apiKey, context, replyTo);
+        const suggestions = await callGroq(apiKey, normalized, myId, myName);
         if (suggestions.length >= 2) {
           return res.json({ suggestions, source: "ai" });
         }
@@ -40,7 +35,7 @@ router.post("/suggestions", protect, async (req, res) => {
     }
 
     res.json({
-      suggestions: getContextualSuggestions(normalized, userId),
+      suggestions: getContextualSuggestions(normalized, myId),
       source: "local",
     });
   } catch (err) {
