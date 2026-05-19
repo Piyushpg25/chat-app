@@ -3,7 +3,7 @@ const protect = require("../middleware/authMiddleware");
 const logger = require("../config/logger");
 const {
   normalizeMessages,
-  getMessageToReplyTo,
+  detectChatLanguage,
   getContextualSuggestions,
   callGroq,
 } = require("../utils/suggestions");
@@ -16,6 +16,7 @@ router.post("/suggestions", protect, async (req, res) => {
     const normalized = normalizeMessages(messages);
     const myName = username || req.user?.username || "User";
     const myId = userId || String(req.user?._id || "");
+    const language = detectChatLanguage(normalized);
 
     if (!normalized.length) {
       return res.status(400).json({ message: "No messages provided" });
@@ -25,9 +26,14 @@ router.post("/suggestions", protect, async (req, res) => {
 
     if (apiKey) {
       try {
-        const suggestions = await callGroq(apiKey, normalized, myId, myName);
+        const { suggestions } = await callGroq(
+          apiKey,
+          normalized,
+          myId,
+          myName,
+        );
         if (suggestions.length >= 2) {
-          return res.json({ suggestions, source: "ai" });
+          return res.json({ suggestions, source: "ai", language });
         }
       } catch (err) {
         logger.error("Groq API error:", err.message);
@@ -37,15 +43,15 @@ router.post("/suggestions", protect, async (req, res) => {
     res.json({
       suggestions: getContextualSuggestions(normalized, myId),
       source: "local",
+      language,
     });
   } catch (err) {
     logger.error("AI suggestions error:", err.message);
+    const normalized = normalizeMessages(req.body.messages || []);
     res.json({
-      suggestions: getContextualSuggestions(
-        normalizeMessages(req.body.messages || []),
-        req.body.userId,
-      ),
+      suggestions: getContextualSuggestions(normalized, req.body.userId),
       source: "local",
+      language: detectChatLanguage(normalized),
     });
   }
 });

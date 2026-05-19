@@ -2,8 +2,11 @@ const STOP_WORDS = new Set([
   "the", "and", "for", "that", "this", "with", "you", "are", "was", "have",
   "hai", "hain", "kya", "main", "tum", "aap", "ke", "ki", "ka", "ko", "se",
   "me", "mein", "par", "ya", "nahi", "bhi", "toh", "aur", "ek", "wo", "ye",
-  "will", "can", "just", "like", "what", "when", "how",
+  "will", "can", "just", "like", "what", "when", "how", "your", "from", "they",
 ]);
+
+const HINDI_ROMAN =
+  /\b(haan|nahin|nahi|kya|kyu|kaise|kab|theek|thik|acha|achha|bhai|yaar|sun|bol|samajh|matlab|bilkul|shayad|kal|aaj|ghar|kaam)\b/gi;
 
 const normalizeSender = (msg) => ({
   _id: msg.sender?._id || msg.sender,
@@ -18,6 +21,63 @@ const normalizeMessages = (messages) =>
       mediaType: m.mediaType || "text",
       sender: normalizeSender(m),
     }));
+
+const detectChatLanguage = (normalized) => {
+  const recent = normalized
+    .slice(-10)
+    .map((m) => m.content)
+    .join(" ");
+
+  const devanagari = (recent.match(/[\u0900-\u097F]/g) || []).length;
+  const latin = (recent.match(/[a-zA-Z]/g) || []).length;
+  const hindiRomanHits = (recent.match(HINDI_ROMAN) || []).length;
+
+  if (devanagari > 12 && devanagari > latin * 0.4) {
+    return "hindi";
+  }
+
+  const words = recent
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length > 2);
+
+  const englishWords = words.filter(
+    (w) => /^[a-z]+$/.test(w) && !HINDI_ROMAN.test(w),
+  );
+
+  const englishRatio = englishWords.length / Math.max(words.length, 1);
+
+  if (devanagari < 4 && hindiRomanHits <= 1 && englishRatio >= 0.65) {
+    return "english";
+  }
+
+  if (hindiRomanHits >= 2 || devanagari >= 4) {
+    return "hinglish";
+  }
+
+  return latin >= devanagari ? "english" : "hinglish";
+};
+
+const getLanguageInstruction = (lang) => {
+  if (lang === "english") {
+    return `CHAT LANGUAGE: English
+Write all 3 replies in ENGLISH ONLY.
+Forbidden: Hindi words (haan, theek, kya, nahi, yaar, acha), Hinglish, Devanagari script.
+Sound like natural English texting.`;
+  }
+  if (lang === "hindi") {
+    return `CHAT LANGUAGE: Hindi (Devanagari)
+Write all 3 replies in Hindi script only.`;
+  }
+  return `CHAT LANGUAGE: Hinglish (Roman Hindi + English mix)
+Match the casual Hinglish style of the chat.`;
+};
+
+const hasWrongLanguage = (text, lang) => {
+  if (lang !== "english") return false;
+  if (/[\u0900-\u097F]/.test(text)) return true;
+  return HINDI_ROMAN.test(text);
+};
 
 const getMessageToReplyTo = (messages, userId) => {
   const withText = normalizeMessages(messages);
@@ -46,15 +106,7 @@ const extractKeywords = (text) => {
   ].slice(0, 8);
 };
 
-const buildContext = (messages) => {
-  const normalized = normalizeMessages(messages);
-  return normalized
-    .slice(-15)
-    .map((msg) => `${msg.sender.username}: ${msg.content}`)
-    .join("\n");
-};
-
-const buildGroqMessages = (normalized, userId, username) => {
+const buildGroqMessages = (normalized, userId, username, lang) => {
   const me = String(userId || "");
   const myName = username || "Me";
   const recent = normalized.slice(-15);
@@ -73,28 +125,23 @@ const buildGroqMessages = (normalized, userId, username) => {
   return [
     {
       role: "system",
-      content: `You are a smart reply assistant for "${myName}" in a live group chat.
+      content: `You suggest 3 short chat replies for "${myName}".
 
-Your job: suggest 3 SHORT messages ${myName} can send NEXT.
+${getLanguageInstruction(lang)}
 
-CRITICAL:
-- Read the full chat history below in order.
-- Reply ONLY to the current topic — especially this latest line:
-  ${latestFrom} said: "${latestText}"
-- Use the SAME language style as the chat (Hindi / English / Hinglish mix).
-- Each reply must mention or clearly relate to words from the latest message.
-- Sound natural like WhatsApp — casual, not formal essay.
-- Do NOT repeat old topics from earlier in chat if the topic changed.
-- Do NOT output generic one-word replies unless the chat is only one word.
-- 3 replies must be meaningfully different.
+RULES:
+- Read the conversation below.
+- Reply ONLY to the latest message: ${latestFrom} said "${latestText}"
+- Be precise and on-topic — use words from that latest message.
+- Max 14 words per reply.
+- 3 different replies.
 
-Output ONLY this JSON (no markdown):
-{"replies":["reply1","reply2","reply3"]}`,
+Output JSON only: {"replies":["...","...","..."]}`,
     },
     ...history,
     {
       role: "user",
-      content: `Give 3 reply options for ${myName} that directly answer "${latestText}" from ${latestFrom}. JSON only.`,
+      content: `Latest: "${latestText}"\nGive 3 ${lang} replies for ${myName}. JSON only.`,
     },
   ];
 };
@@ -125,13 +172,15 @@ const parseGroqSuggestions = (text) => {
         : [];
     }
   } catch {
-    /* fall through */
+    /* empty */
   }
-  return text
-    .split("\n")
-    .map((line) => line.replace(/^[\d.\-*"']+\s*/, "").trim())
-    .filter((line) => line.length > 2 && line.length < 100)
-    .slice(0, 3);
+  return [];
+};
+
+const filterByLanguage = (suggestions, lang) => {
+  if (lang !== "english") return suggestions;
+  const filtered = suggestions.filter((s) => !hasWrongLanguage(s, lang));
+  return filtered.length ? filtered : suggestions;
 };
 
 const scoreRelevance = (suggestions, keywords) => {
@@ -154,9 +203,9 @@ const requestGroq = async (apiKey, groqMessages, temperature) => {
       },
       body: JSON.stringify({
         model: "llama-3.3-70b-versatile",
-        max_tokens: 280,
+        max_tokens: 260,
         temperature,
-        top_p: 0.9,
+        top_p: 0.85,
         messages: groqMessages,
       }),
     },
@@ -171,66 +220,107 @@ const requestGroq = async (apiKey, groqMessages, temperature) => {
 };
 
 const callGroq = async (apiKey, normalized, userId, username) => {
+  const lang = detectChatLanguage(normalized);
   const replyTo = getMessageToReplyTo(normalized, userId);
   const keywords = extractKeywords(replyTo?.content || normalized.at(-1)?.content);
 
-  const groqMessages = buildGroqMessages(normalized, userId, username);
-  let suggestions = await requestGroq(apiKey, groqMessages, 0.7);
+  let groqMessages = buildGroqMessages(normalized, userId, username, lang);
+  let suggestions = filterByLanguage(
+    await requestGroq(apiKey, groqMessages, 0.55),
+    lang,
+  );
 
-  if (suggestions.length >= 2 && scoreRelevance(suggestions, keywords) < 0.34) {
+  const needsRetry =
+    suggestions.length < 2 ||
+    scoreRelevance(suggestions, keywords) < 0.34 ||
+    (lang === "english" && suggestions.some((s) => hasWrongLanguage(s, lang)));
+
+  if (needsRetry) {
     const retryMessages = [
-      ...groqMessages.slice(0, -1),
+      ...groqMessages.slice(0, 1),
+      {
+        role: "system",
+        content: `${getLanguageInstruction(lang)}
+Latest message: "${replyTo?.content}"
+Use these exact topic words: ${keywords.join(", ")}
+JSON: {"replies":["...","...","..."]}`,
+      },
+      ...groqMessages.slice(1, -1),
       {
         role: "user",
-        content: `WRONG — replies ignored the latest message. Latest was: "${replyTo?.content}". 
-Use words from that message. JSON: {"replies":["...","...","..."]}`,
+        content: `Precise ${lang} replies to: "${replyTo?.content}". JSON only.`,
       },
     ];
-    const retry = await requestGroq(apiKey, retryMessages, 0.45);
-    if (retry.length >= 2 && scoreRelevance(retry, keywords) >= scoreRelevance(suggestions, keywords)) {
-      suggestions = retry;
-    }
+    const retry = filterByLanguage(
+      await requestGroq(apiKey, retryMessages, 0.35),
+      lang,
+    );
+    if (retry.length >= 2) suggestions = retry;
   }
 
-  return suggestions;
+  return { suggestions, language: lang };
 };
 
 const getContextualSuggestions = (messages, userId) => {
   const normalized = normalizeMessages(messages);
+  const lang = detectChatLanguage(normalized);
   const replyTo = getMessageToReplyTo(normalized, userId);
   const text = replyTo?.content?.trim() || "";
-  const speaker = replyTo?.sender?.username || "dost";
+  const speaker = replyTo?.sender?.username || "friend";
+  const keywords = extractKeywords(text);
+  const w1 = keywords[0] || "that";
+  const w2 = keywords[1] || "";
+  const w3 = keywords[2] || "";
 
   if (!text) {
+    if (lang === "english") {
+      return ["Hey! What's up?", "I'm here, go ahead", "Tell me more"];
+    }
     return ["Hello! 👋", "Kya chal raha hai?", "Bol, sun raha hoon"];
   }
 
-  const keywords = extractKeywords(text);
-  const w1 = keywords[0] || "isse";
-  const w2 = keywords[1] || "";
-  const w3 = keywords[2] || "";
+  if (lang === "english") {
+    if (text.includes("?")) {
+      return [
+        `Yeah, ${w1} works for me`,
+        `Not sure about ${w1} yet`,
+        `Good point on ${w2 || w1}, ${speaker}`,
+      ];
+    }
+    return [
+      `Yeah ${speaker}, ${w1} makes sense`,
+      `I agree — ${w1} ${w2}`.trim(),
+      `Sounds good, let's do ${w1}`,
+    ];
+  }
+
+  if (lang === "hindi") {
+    return [
+      `हाँ, ${w1} ठीक है`,
+      `${speaker}, ${w1} पर सहमत हूँ`,
+      `अच्छा, ${w2 || w1} पर बात करते हैं`,
+    ];
+  }
 
   if (text.includes("?")) {
     return [
       `Haan ${speaker}, ${w1} ${w2}`.trim(),
-      `Nahi, ${w1} ke baare mein nahi`,
-      `${w3 || w1} — mujhe bhi yahi puchna tha`,
-    ].map((s) => s.slice(0, 72));
+      `Nahi, ${w1} shayad nahi`,
+      `${w3 || w1} — good question`,
+    ];
   }
 
   return [
-    `Haan ${speaker}, ${w1} ${w2} sahi hai`.trim(),
-    `${w1} par agree — ${w3 || "good point"}`,
-    `Theek hai, ${w1} ${w2} pe baat karte hain`.trim(),
-  ].map((s) => s.replace(/\s+/g, " ").slice(0, 72));
+    `Haan ${speaker}, ${w1} sahi hai`,
+    `${w1} — agree 👍`,
+    `Chalo ${w1} ${w2} pe baat karte hain`.trim(),
+  ];
 };
 
 module.exports = {
   normalizeMessages,
-  buildContext,
+  detectChatLanguage,
   getMessageToReplyTo,
   getContextualSuggestions,
   callGroq,
-  parseGroqSuggestions,
-  buildGroqMessages,
 };

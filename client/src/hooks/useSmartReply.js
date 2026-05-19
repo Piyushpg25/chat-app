@@ -56,8 +56,8 @@ const useSmartReply = () => {
         setSuggestions(res.data.suggestions);
         if (res.data.source === "local") {
           toast.info(
-            "Best AI: free Groq key → Render me GROQ_API_KEY (console.groq.com)",
-            { duration: 4500 },
+            "Smart AI ke liye Render par GROQ_API_KEY lagao (free — console.groq.com). Abhi basic suggestions chal rahe hain.",
+            { duration: 5000 },
           );
         }
         return;
