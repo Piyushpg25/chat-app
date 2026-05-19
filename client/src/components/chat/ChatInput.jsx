@@ -74,12 +74,14 @@ const ChatInput = ({ socket }) => {
 
   // ── AI Smart Reply trigger ──
   const handleSmartReply = () => {
-    // Sirf text messages filter karo
-    const textMessages = messages.filter(m => m.mediaType === 'text' && m.content);
+    const textMessages = messages.filter(
+      (m) => m?.mediaType === 'text' && m?.content?.trim(),
+    );
     if (textMessages.length === 0) {
       toast.info('Pehle kuch messages hone chahiye!');
       return;
     }
+    clearSuggestions();
     getSuggestions(textMessages);
   };
 

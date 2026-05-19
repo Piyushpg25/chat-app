@@ -1,70 +1,97 @@
-const buildContext = (messages) =>
-  messages
-    .slice(-8)
-    .filter((m) => m?.content && m.content.trim() !== "")
-    .map((msg) => {
-      const name = msg.sender?.username || "User";
-      return `${name}: ${msg.content.trim()}`;
+const STOP_WORDS = new Set([
+  "the", "and", "for", "that", "this", "with", "you", "are", "was", "have",
+  "hai", "hain", "kya", "main", "tum", "aap", "ke", "ki", "ka", "ko", "se",
+  "me", "mein", "par", "ya", "nahi", "bhi", "toh", "aur", "ek", "wo", "ye",
+]);
+
+const normalizeSender = (msg) => ({
+  _id: msg.sender?._id || msg.sender,
+  username: msg.sender?.username || "User",
+});
+
+const normalizeMessages = (messages) =>
+  (messages || [])
+    .filter((m) => m?.content?.trim())
+    .map((m) => ({
+      content: m.content.trim(),
+      mediaType: m.mediaType || "text",
+      sender: normalizeSender(m),
+    }));
+
+const buildContext = (messages) => {
+  const normalized = normalizeMessages(messages);
+  return normalized
+    .slice(-12)
+    .map((msg, i) => {
+      const tag = i === normalized.length - 1 ? " [LATEST]" : "";
+      return `${msg.sender.username}: ${msg.content}${tag}`;
     })
     .join("\n");
+};
 
 const getMessageToReplyTo = (messages, userId) => {
-  const withText = messages.filter((m) => m?.content?.trim());
+  const withText = normalizeMessages(messages);
   if (!withText.length) return null;
 
-  if (userId) {
-    const fromOthers = withText.filter((m) => {
-      const senderId = m.sender?._id || m.sender;
-      return String(senderId) !== String(userId);
-    });
-    if (fromOthers.length) return fromOthers.at(-1);
+  const last = withText.at(-1);
+  const lastId = String(last.sender._id || "");
+
+  if (userId && lastId === String(userId)) {
+    return withText.at(-2) || last;
   }
 
-  return withText.at(-1);
+  return last;
 };
 
 const getContextualSuggestions = (messages, userId) => {
-  const target = getMessageToReplyTo(messages, userId);
-  const text = (target?.content || "").trim();
-  const speaker = target?.sender?.username || "dost";
-  const lower = text.toLowerCase();
+  const replyTo = getMessageToReplyTo(messages, userId);
+  const text = replyTo?.content?.trim() || "";
+  const speaker = replyTo?.sender?.username || "dost";
 
   if (!text) {
     return ["Hello! 👋", "Kya chal raha hai?", "Bol, sun raha hoon"];
   }
 
-  if (/^(hi|hello|hey|namaste|yo)\b/.test(lower)) {
-    return [`Hey ${speaker}! 👋`, "Namaste!", "Kaise ho?"];
-  }
-  if (/kaise ho|kya haal|kaisa hai|how are you/.test(lower)) {
-    return ["Main badhiya hoon! 😊", "Sab theek hai, tum batao", "Achha chal raha hai"];
-  }
-  if (/kal |aaj |kab |time|kitne baje/.test(lower)) {
-    return ["Haan, time theek hai", "Mujhe bata dena kab", "Okay, fix karte hain"];
-  }
-  if (/game|khel|play|match/.test(lower)) {
-    return ["Chalo khelte hain! 🎮", "Haan, main ready hoon", "Kab start karein?"];
-  }
-  if (/code|bug|error|project|app/.test(lower)) {
-    return ["Dekhta hoon, bhej details", "Haan, fix ho jayega", "Achha point hai"];
-  }
-  if (/\?/.test(text)) {
-    const topic = text.replace(/\?/g, "").split(" ").slice(-4).join(" ") || "ye";
-    return [`Haan, ${topic} possible hai`, "Nahi, shayad nahi", `Achha sawal — ${topic}`];
-  }
-  if (/thank|dhanyav|shukriya|thanks/.test(lower)) {
-    return ["Welcome! 😊", "Koi baat nahi", "Khushi hui help karke"];
-  }
-  if (/sorry|maaf|pardon/.test(lower)) {
-    return ["Koi baat nahi yaar", "It's okay 👍", "Chalo, aage badhte hain"];
+  const words = text
+    .replace(/[^\w\s\u0900-\u097F]/gi, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !STOP_WORDS.has(w.toLowerCase()));
+
+  const unique = [...new Set(words.map((w) => w.toLowerCase()))];
+  const w1 = unique[0] || "isse";
+  const w2 = unique[1] || "";
+  const w3 = unique[2] || "";
+  const snippet =
+    text.length > 36 ? `${text.slice(0, 36).trim()}…` : text;
+
+  if (text.includes("?")) {
+    return [
+      `Haan, ${w1} ${w2}`.trim(),
+      `Nahi, ${w1} shayad nahi`,
+      `${speaker}, ${snippet} — sochta hoon`,
+    ];
   }
 
-  const short = text.length > 40 ? `${text.slice(0, 40)}...` : text;
-  return [
-    `Haan ${speaker}, ${short} — agree`,
-    `Interesting, ${speaker}!`,
-    `Theek hai, samajh gaya 👍`,
+  const variants = [
+    [
+      `Sahi baat hai — ${w1} ${w2}`.trim(),
+      `${speaker}, ${w1} par agree 👍`,
+      `Haan, ${snippet} theek lagta hai`,
+    ],
+    [
+      `${w1} ${w2} — interesting!`.trim(),
+      `Achha point ${speaker}, ${w1}`,
+      `Theek hai, ${w3 || w1} pe baat karte hain`,
+    ],
+    [
+      `Bilkul, ${w1} sahi hai`,
+      `${speaker} ne ${w1} bola — haan`,
+      `Samajh gaya: ${snippet}`,
+    ],
   ];
+
+  const pick = (text.length + unique.join("").length) % variants.length;
+  return variants[pick].map((s) => s.replace(/\s+/g, " ").trim().slice(0, 72));
 };
 
 const parseGroqSuggestions = (text) => {
@@ -73,7 +100,12 @@ const parseGroqSuggestions = (text) => {
     const clean = text.replace(/```json|```/g, "").trim();
     const match = clean.match(/\[[\s\S]*\]/);
     const parsed = JSON.parse(match ? match[0] : clean);
-    return Array.isArray(parsed) ? parsed.slice(0, 3).map(String) : [];
+    return Array.isArray(parsed)
+      ? [...new Set(parsed.map((s) => String(s).trim()).filter(Boolean))].slice(
+          0,
+          3,
+        )
+      : [];
   } catch {
     return text
       .split("\n")
@@ -84,9 +116,8 @@ const parseGroqSuggestions = (text) => {
 };
 
 const callGroq = async (apiKey, context, replyTo) => {
-  const focus = replyTo
-    ? `The user needs to reply to this last message from ${replyTo.sender?.username || "someone"}: "${replyTo.content.trim()}"`
-    : "Suggest what the user should say next";
+  const latest = replyTo?.content?.trim() || "";
+  const latestFrom = replyTo?.sender?.username || "someone";
 
   const response = await fetch(
     "https://api.groq.com/openai/v1/chat/completions",
@@ -97,18 +128,24 @@ const callGroq = async (apiKey, context, replyTo) => {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "llama-3.1-8b-instant",
-        max_tokens: 200,
-        temperature: 0.8,
+        model: "llama-3.3-70b-versatile",
+        max_tokens: 220,
+        temperature: 0.95,
         messages: [
           {
             role: "system",
-            content:
-              "You suggest short chat replies. Use the SAME language as the conversation (Hindi, English, or Hinglish). Each reply max 10 words. Must relate to what was just discussed. Output ONLY a JSON array of 3 strings.",
+            content: `You write 3 different short chat reply options for the user.
+Rules:
+- Read the FULL conversation below.
+- Reply must match the LATEST topic (last message), not an old topic.
+- Use the same language as the chat (Hindi / English / Hinglish).
+- Max 12 words per reply.
+- 3 replies must be DIFFERENT from each other.
+- Output ONLY JSON array: ["reply1","reply2","reply3"]`,
           },
           {
             role: "user",
-            content: `Conversation:\n${context}\n\n${focus}\n\nJSON array only:`,
+            content: `Conversation:\n${context}\n\nLATEST message to respond to (from ${latestFrom}):\n"${latest}"\n\nGive 3 fresh replies to THIS latest message only.`,
           },
         ],
       }),
@@ -124,6 +161,7 @@ const callGroq = async (apiKey, context, replyTo) => {
 };
 
 module.exports = {
+  normalizeMessages,
   buildContext,
   getMessageToReplyTo,
   getContextualSuggestions,

@@ -2,7 +2,10 @@ import { useState } from "react";
 import { toast } from "sonner";
 import api from "@/lib/axios";
 import useAuthStore from "@/store/authStore";
-import { fetchGroqSuggestions } from "@/lib/smartReply";
+import {
+  fetchGroqSuggestions,
+  normalizeMessages,
+} from "@/lib/smartReply";
 
 const useSmartReply = () => {
   const [suggestions, setSuggestions] = useState([]);
@@ -12,23 +15,41 @@ const useSmartReply = () => {
   const getSuggestions = async (lastMessages) => {
     if (!lastMessages?.length) return;
 
-    const hasText = lastMessages.some(
-      (m) => m?.content && m.content.trim() !== "",
-    );
-    if (!hasText) {
+    const normalized = normalizeMessages(lastMessages);
+    if (!normalized.length) {
       setSuggestions([]);
       return;
     }
 
     const payload = {
-      messages: lastMessages,
+      messages: normalized,
       userId: user?.id,
     };
 
+    const clientKey = import.meta.env.VITE_GROQ_API_KEY?.trim();
+
     try {
       setLoading(true);
+      setSuggestions([]);
 
-      // 1) Server AI (Render GROQ_API_KEY)
+      // 1) Client Groq first (fastest if Vercel key set)
+      if (clientKey) {
+        try {
+          const fromClient = await fetchGroqSuggestions(
+            clientKey,
+            normalized,
+            user?.id,
+          );
+          if (fromClient.length >= 2) {
+            setSuggestions(fromClient);
+            return;
+          }
+        } catch {
+          /* try server */
+        }
+      }
+
+      // 2) Server Groq (Render GROQ_API_KEY)
       const res = await api.post("/ai/suggestions", payload);
 
       if (res.data.source === "ai" && res.data.suggestions?.length >= 2) {
@@ -36,53 +57,36 @@ const useSmartReply = () => {
         return;
       }
 
-      // 2) Client Groq (Vercel VITE_GROQ_API_KEY) — real contextual AI
-      const clientKey = import.meta.env.VITE_GROQ_API_KEY?.trim();
-      if (clientKey) {
-        try {
-          const fromGroq = await fetchGroqSuggestions(
-            clientKey,
-            lastMessages,
-            user?.id,
-          );
-          if (fromGroq.length >= 2) {
-            setSuggestions(fromGroq);
-            return;
-          }
-        } catch {
-          // fall through to server local suggestions
-        }
-      }
-
-      // 3) Server contextual fallback (chat-based, not generic)
+      // 3) Server word-based fallback (changes with each message)
       if (res.data.suggestions?.length) {
         setSuggestions(res.data.suggestions);
+        if (res.data.source === "local") {
+          toast.info(
+            "Better AI: Render par GROQ_API_KEY add karo (free — console.groq.com)",
+            { duration: 4000 },
+          );
+        }
         return;
       }
 
-      toast.info(
-        "Real AI ke liye Render par GROQ_API_KEY add karo (console.groq.com)",
-      );
-      setSuggestions([]);
+      toast.error("Suggestions generate nahi ho paye");
     } catch {
-      // Network error — try client Groq only
-      const clientKey = import.meta.env.VITE_GROQ_API_KEY?.trim();
       if (clientKey) {
         try {
-          const fromGroq = await fetchGroqSuggestions(
+          const fromClient = await fetchGroqSuggestions(
             clientKey,
-            lastMessages,
+            normalized,
             user?.id,
           );
-          if (fromGroq.length) {
-            setSuggestions(fromGroq);
+          if (fromClient.length) {
+            setSuggestions(fromClient);
             return;
           }
         } catch {
           /* empty */
         }
       }
-      toast.error("Suggestions load nahi ho paye");
+      toast.error("AI suggestions failed — check internet");
       setSuggestions([]);
     } finally {
       setLoading(false);

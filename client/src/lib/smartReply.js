@@ -1,26 +1,38 @@
-export const buildContext = (messages) =>
-  messages
-    .slice(-8)
+export const normalizeMessages = (messages) =>
+  (messages || [])
     .filter((m) => m?.content?.trim())
-    .map((msg) => {
-      const name = msg.sender?.username || "User";
-      return `${name}: ${msg.content.trim()}`;
+    .map((m) => ({
+      content: m.content.trim(),
+      mediaType: m.mediaType || "text",
+      sender: {
+        _id: m.sender?._id || m.sender,
+        username: m.sender?.username || "User",
+      },
+    }));
+
+export const buildContext = (messages) => {
+  const normalized = normalizeMessages(messages);
+  return normalized
+    .slice(-12)
+    .map((msg, i) => {
+      const tag = i === normalized.length - 1 ? " [LATEST]" : "";
+      return `${msg.sender.username}: ${msg.content}${tag}`;
     })
     .join("\n");
+};
 
 export const getMessageToReplyTo = (messages, userId) => {
-  const withText = messages.filter((m) => m?.content?.trim());
+  const withText = normalizeMessages(messages);
   if (!withText.length) return null;
 
-  if (userId) {
-    const fromOthers = withText.filter((m) => {
-      const senderId = m.sender?._id || m.sender;
-      return String(senderId) !== String(userId);
-    });
-    if (fromOthers.length) return fromOthers.at(-1);
+  const last = withText.at(-1);
+  const lastId = String(last.sender._id || "");
+
+  if (userId && lastId === String(userId)) {
+    return withText.at(-2) || last;
   }
 
-  return withText.at(-1);
+  return last;
 };
 
 export const parseGroqSuggestions = (text) => {
@@ -29,7 +41,12 @@ export const parseGroqSuggestions = (text) => {
     const clean = text.replace(/```json|```/g, "").trim();
     const match = clean.match(/\[[\s\S]*\]/);
     const parsed = JSON.parse(match ? match[0] : clean);
-    return Array.isArray(parsed) ? parsed.slice(0, 3).map(String) : [];
+    return Array.isArray(parsed)
+      ? [...new Set(parsed.map((s) => String(s).trim()).filter(Boolean))].slice(
+          0,
+          3,
+        )
+      : [];
   } catch {
     return [];
   }
@@ -40,9 +57,8 @@ export const fetchGroqSuggestions = async (apiKey, messages, userId) => {
   if (!context) return [];
 
   const replyTo = getMessageToReplyTo(messages, userId);
-  const focus = replyTo
-    ? `Reply to ${replyTo.sender?.username || "them"}: "${replyTo.content.trim()}"`
-    : "Suggest next message";
+  const latest = replyTo?.content?.trim() || "";
+  const latestFrom = replyTo?.sender?.username || "someone";
 
   const response = await fetch(
     "https://api.groq.com/openai/v1/chat/completions",
@@ -53,18 +69,21 @@ export const fetchGroqSuggestions = async (apiKey, messages, userId) => {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "llama-3.1-8b-instant",
-        max_tokens: 200,
-        temperature: 0.8,
+        model: "llama-3.3-70b-versatile",
+        max_tokens: 220,
+        temperature: 0.95,
         messages: [
           {
             role: "system",
-            content:
-              "Suggest 3 short chat replies in the SAME language as the chat (Hindi/English/Hinglish). Must match the conversation topic. Max 10 words each. JSON array only.",
+            content: `Write 3 different short chat replies for the user.
+- Match the LATEST message topic only.
+- Same language as chat (Hindi/English/Hinglish).
+- Max 12 words each.
+- JSON array only: ["a","b","c"]`,
           },
           {
             role: "user",
-            content: `Chat:\n${context}\n\n${focus}\n\n["reply1","reply2","reply3"]`,
+            content: `Chat:\n${context}\n\nReply to LATEST from ${latestFrom}:\n"${latest}"`,
           },
         ],
       }),
